@@ -1,14 +1,15 @@
 import {
   BizCode,
   PingRequestSchema,
-  PingResponseSchema,
   buildFailure,
   buildSuccess,
   type ApiMeta,
 } from '@repo/contracts'
+import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
-import { validator } from 'hono/validator'
+import type { ZodError } from 'zod'
+import { getApiEnv } from './env'
 
 type AppErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 504
 
@@ -23,7 +24,7 @@ class AppError extends Error {
   }
 }
 
-const app = new Hono()
+const app = new Hono<{ Bindings: CloudflareBindings }>()
 
 function createMeta(): ApiMeta {
   return {
@@ -67,28 +68,31 @@ const routes = app
   })
   .post(
     '/rpc/system/ping',
-    validator('json', (value, c) => {
-      const parsed = PingRequestSchema.safeParse(value)
-
-      if (!parsed.success) {
-        const errorMsg = {
+    zValidator('json', PingRequestSchema, (result, c) => {
+      if (!result.success) {
+        const res = {
           code: BizCode.COMMON_INVALID_REQUEST,
           message: 'Invalid request payload',
-          details: parsed.error.flatten(),
+          details: (result.error as ZodError).flatten(),
         }
-        return c.json(buildFailure(errorMsg, createMeta()), 400)
-      }
 
-      return parsed.data
+        return c.json(buildFailure(res, createMeta()), 400)
+      }
     }),
     (c) => {
       const payload = c.req.valid('json')
-      const successMsg = PingResponseSchema.parse({
-        service: 'api',
-        message: `pong, ${payload.name}`,
-      })
-      const res = buildSuccess(successMsg, createMeta())
-      return c.json(res)
+      const env = getApiEnv(c.env)
+
+      return c.json(
+        buildSuccess(
+          {
+            service: 'api',
+            message: `pong, ${payload.name}`,
+            env: env.APP_ENV,
+          },
+          createMeta(),
+        ),
+      )
     },
   )
 
